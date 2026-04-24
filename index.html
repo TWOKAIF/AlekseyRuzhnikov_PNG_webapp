@@ -331,6 +331,21 @@ textarea::placeholder{color:rgba(255,255,255,.2)}
     Felidae:{family:"'Felidae',serif",weight:400,label:'Felidae'}
   };
 
+  /* Символы которых нет в шрифтах (trial-версии с неполным кириллом).
+     Для таких букв переключаемся на HelveticaBold (полный набор глифов).
+     Синхронизировано с renderer.py на сервере. */
+  var FONT_MISSING={
+    ChopinSemiBold:new Set(['Ё','Ы','Э','ё','ы','э']),
+    Felidae:new Set(['"'])
+  };
+  var FALLBACK_FONT_KEY='HelveticaBold';
+
+  function fontForChar(primaryKey, ch){
+    var miss=FONT_MISSING[primaryKey];
+    if(miss && miss.has(ch)) return FONTS[FALLBACK_FONT_KEY];
+    return FONTS[primaryKey];
+  }
+
   var state={color:'#FFFFFF',font:'HelveticaBold',align:'left',caseMode:'auto'};
 
   var SCALE=5;
@@ -370,34 +385,40 @@ textarea::placeholder{color:rgba(255,255,255,.2)}
     if(before!==after){el.value=after;try{el.selectionStart=el.selectionEnd=pos}catch(e){}}
   }
 
-  function lnW(ctx,ln,ls){
-    if(!ln)return 0;
-    var chars=Array.from(ln);
-    var m=ctx.measureText(ln);
-    var base=m.width;
-    if(m.actualBoundingBoxLeft!==undefined&&m.actualBoundingBoxRight!==undefined){
-      base=Math.max(base,m.actualBoundingBoxLeft+m.actualBoundingBoxRight);
-    }
-    return base+(chars.length>1?(chars.length-1)*ls:0);
+  /* Устанавливает ctx.font для конкретного символа (с учётом fallback) */
+  function setFontForChar(ctx,primaryKey,px,ch){
+    var f=fontForChar(primaryKey,ch);
+    ctx.font=f.weight+' '+px+'px '+f.family;
   }
 
-  function drawLn(ctx,ln,x,y,ls){
+  function lnW(ctx,ln,ls,primaryKey,px){
+    if(!ln)return 0;
+    var chars=Array.from(ln);
+    var total=0;
+    for(var i=0;i<chars.length;i++){
+      setFontForChar(ctx,primaryKey,px,chars[i]);
+      total+=ctx.measureText(chars[i]).width;
+    }
+    if(chars.length>1)total+=(chars.length-1)*ls;
+    return total;
+  }
+
+  function drawLn(ctx,ln,x,y,ls,primaryKey,px){
     if(!ln)return;
     var chars=Array.from(ln);
-    if(Math.abs(ls)<.5){ctx.fillText(ln,x,y);return}
     var cx=x;
     for(var i=0;i<chars.length;i++){
+      setFontForChar(ctx,primaryKey,px,chars[i]);
       ctx.fillText(chars[i],cx,y);
       cx+=ctx.measureText(chars[i]).width+ls;
     }
   }
 
-  function measBlk(ctx,txt,px,wt,lh,ls,ff){
-    ctx.font=wt+' '+px+'px '+ff;
+  function measBlk(ctx,txt,px,primaryKey,lh,ls){
     var lsp=ls*px/100, lhp=Math.round(px*lh/100);
     var lines=(txt||'').split('\n');
     var mw=0;
-    for(var i=0;i<lines.length;i++){var w=lnW(ctx,lines[i],lsp);if(w>mw)mw=w}
+    for(var i=0;i<lines.length;i++){var w=lnW(ctx,lines[i],lsp,primaryKey,px);if(w>mw)mw=w}
     mw+=px*0.12;
     return{w:mw,h:lines.length*lhp,lines:lines,lsp:lsp,lhp:lhp};
   }
@@ -407,7 +428,6 @@ textarea::placeholder{color:rgba(255,255,255,.2)}
     if(!text.trim()){canvas.width=0;canvas.height=0;return false}
 
     var fontKey=state.font;
-    var font=FONTS[fontKey];
     var color=state.color;
     var align=state.align;
     var szRaw=parseInt($('#r_size').value);
@@ -417,7 +437,7 @@ textarea::placeholder{color:rgba(255,255,255,.2)}
     /* Предварительный замер в 1x — вычисляем максимально возможный scale */
     var probeCanvas=document.createElement('canvas');
     var probeCtx=probeCanvas.getContext('2d',{alpha:true});
-    var baseM=measBlk(probeCtx,text,szRaw,font.weight,lh,ls,font.family);
+    var baseM=measBlk(probeCtx,text,szRaw,fontKey,lh,ls);
     var basePad=24;
     var baseW=basePad*2+Math.max(baseM.w,10);
     var baseH=basePad*2+baseM.h;
@@ -433,7 +453,7 @@ textarea::placeholder{color:rgba(255,255,255,.2)}
       var px=szRaw*sc;
       var pad=24*sc;
 
-      var m=measBlk(probeCtx,text,px,font.weight,lh,ls,font.family);
+      var m=measBlk(probeCtx,text,px,fontKey,lh,ls);
       var cW=Math.max(m.w,10);
       var outW=Math.max(pad*2+cW,MIN_W);
       var outH=Math.max(pad*2+m.h,MIN_H);
@@ -443,16 +463,15 @@ textarea::placeholder{color:rgba(255,255,255,.2)}
       canvas.width=Math.round(outW);canvas.height=Math.round(outH);
       var ctx=canvas.getContext('2d',{alpha:true});
       ctx.clearRect(0,0,canvas.width,canvas.height);
-      ctx.font=font.weight+' '+px+'px '+font.family;
       ctx.textBaseline='top';
       ctx.fillStyle=color;
       var cy=pad;
       for(var i=0;i<m.lines.length;i++){
-        var w=lnW(ctx,m.lines[i],m.lsp);
+        var w=lnW(ctx,m.lines[i],m.lsp,fontKey,px);
         var x=pad;
         if(align==='center')x=pad+(cW-w)/2;
         else if(align==='right')x=pad+cW-w;
-        drawLn(ctx,m.lines[i],x,cy,m.lsp);
+        drawLn(ctx,m.lines[i],x,cy,m.lsp,fontKey,px);
         cy+=m.lhp;
       }
       ok=true;break;
